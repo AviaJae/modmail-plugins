@@ -7,11 +7,10 @@ class Say(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @checks.has_permissions(PermissionLevel.ADMIN)
     @commands.command(name='say2')
-    @commands.has_permissions(administrator=True)
     async def say2(self, ctx, channel: discord.TextChannel, *, message: str):
-        """Sends a message to a specified channel, removing @everyone and @here mentions.
-        Only accessible to administrators."""
+        """Sends a message to a specified channel, removing @everyone and @here mentions."""
         # Replace @everyone and @here mentions with a safer alternative
         filtered_message = message.replace("@everyone", "@\u200beveryone").replace("@here", "@\u200bhere")
         
@@ -24,13 +23,6 @@ class Say(commands.Cog):
         except discord.Forbidden:
             pass  # Ignore if bot doesn't have permission to delete
 
-    @say2.error
-    async def say2_error(self, ctx, error):
-        """Handles errors for the say2 command."""
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send("You do not have permission to use this command.", delete_after=10)
-        else:
-            raise error
 
 async def setup(bot):
     """Sets up the Say cog."""
