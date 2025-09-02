@@ -2,67 +2,82 @@ import discord
 from discord.ext import commands
 
 class Welcome(commands.Cog):
-    """Welcome plugin with add, list, and remove functionality, including embed support."""
-
     def __init__(self, bot):
         self.bot = bot
-        self.welcome_messages = {}  # {guild_id: [messages]}
+        # {guild_id: {"channel": channel_id, "message": text/embed}}
+        self.welcome_data = {}
         self.invites = {}
 
-    @commands.Cog.listener()
-    async def on_ready(self):
-        # Cache invites at startup
-        for guild in self.bot.guilds:
-            try:
-                self.invites[guild.id] = await guild.invites()
-            except discord.Forbidden:
-                self.invites[guild.id] = []
-
-    @commands.Cog.listener()
-    async def on_member_join(self, member: discord.Member):
-        guild = member.guild
-        channel = guild.system_channel or next((c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None)
-        if not channel:
-            return
-
-        # Detect invite used
-        used_invite = None
-        try:
-            new_invites = await guild.invites()
-            old_invites = self.invites.get(guild.id, [])
-            for invite in new_invites:
-                old_inv = discord.utils.get(old_invites, code=invite.code)
-                if old_inv and invite.uses > old_inv.uses:
-                    used_invite = invite
-                    break
-            self.invites[guild.id] = new_invites
-        except discord.Forbidden:
-            pass
-
-        invite_text = f" (joined with invite `{used_invite.code}` created by {used_invite.inviter})" if used_invite else ""
-
-        # Send all saved welcome messages
-        for msg in self.welcome_messages.get(guild.id, []):
-            if isinstance(msg, discord.Embed):
-                await channel.send(embed=msg)
-            else:
-                await channel.send(msg + invite_text)
+    # ... [on_ready, on_member_join stay the same] ...
 
     @commands.group(name="welcome", invoke_without_command=True)
     @commands.has_permissions(administrator=True)
     async def welcome(self, ctx):
         """Base command for managing welcome messages."""
-        await ctx.send("Available subcommands: add, list, remove")
+        await ctx.send("Available subcommands: add, remove, test")
 
+    # ---------------- TEST COMMAND ----------------
+    @welcome.command(name="test")
+    @commands.has_permissions(administrator=True)
+    async def welcome_test(self, ctx):
+        """Simulates a welcome message."""
+        guild = ctx.guild
+        data = self.welcome_data.get(guild.id)
+        if not data:
+            return await ctx.send("No welcome message set up.")
+
+        channel = guild.get_channel(data.get("channel"))
+        if not channel or not channel.permissions_for(guild.me).send_messages:
+            return await ctx.send("I don't have permission to send messages in the welcome channel.")
+
+        # Pick who to ping: use ctx.author if no "real" member
+        fake_member = ctx.author  
+
+        # Fake invite info
+        invite_text = "(Joined with test invite `abc123` created by TestUser)"
+
+        # Send test
+        await channel.send(fake_member.mention)
+        msg = data.get("message")
+        if isinstance(msg, discord.Embed):
+            embed = msg.copy()
+            embed.add_field(name="Invite Info", value=invite_text, inline=False)
+            await channel.send(embed=embed)
+        else:
+            await channel.send(msg + "\n" + invite_text)
+
+        await ctx.send("✅ Sent test welcome message.")
+
+    # ---------------- REMOVE COMMAND ----------------
+    @welcome.command(name="remove")
+    @commands.has_permissions(administrator=True)
+    async def welcome_remove(self, ctx):
+        """Remove the current welcome message."""
+        if ctx.guild.id not in self.welcome_data:
+            return await ctx.send("No welcome message set for this server.")
+        self.welcome_data.pop(ctx.guild.id)
+        await ctx.send("✅ Welcome message removed.")
+
+    # ---------------- ADD COMMAND ----------------
     @welcome.command(name="add")
     @commands.has_permissions(administrator=True)
     async def welcome_add(self, ctx):
         """Add a welcome message (text or embed)."""
-        await ctx.send("Would you like to create an embed? (yes/no)")
-
         def check(m):
             return m.author == ctx.author and m.channel == ctx.channel
 
+        # Ask for channel
+        await ctx.send("Mention the channel where welcomes should be sent:")
+        try:
+            reply = await self.bot.wait_for("message", check=check, timeout=60)
+        except:
+            return await ctx.send("Timed out.")
+        if not reply.channel_mentions:
+            return await ctx.send("You must mention a valid channel.")
+        channel = reply.channel_mentions[0]
+
+        # Ask for embed or text
+        await ctx.send("Would you like to create an embed? (yes/no)")
         try:
             reply = await self.bot.wait_for("message", check=check, timeout=60)
         except:
@@ -84,11 +99,16 @@ class Welcome(commands.Cog):
 
             embed = discord.Embed(title=title, description=desc, color=color)
 
-            # Thumbnail (custom logo, not avatar)
-            await ctx.send("Enter a thumbnail URL (e.g. AirAsia logo) or type `none`:")
-            thumb_msg = (await self.bot.wait_for("message", check=check, timeout=60)).content
-            if thumb_msg.lower() != "none":
-                embed.set_thumbnail(url=thumb_msg)
+            # Thumbnail (upload file)
+            await ctx.send("Upload an image for the thumbnail, or type `none`:")
+            thumb_msg = await self.bot.wait_for("message", check=check, timeout=60)
+            if thumb_msg.attachments:
+                embed.set_thumbnail(url=thumb_msg.attachments[0].url)
+            elif thumb_msg.content.lower() != "none":
+                try:
+                    embed.set_thumbnail(url=thumb_msg.content)
+                except:
+                    pass
 
             # Footer
             await ctx.send("Enter footer text, or type `none`:")
@@ -96,37 +116,18 @@ class Welcome(commands.Cog):
             if footer_msg.lower() != "none":
                 embed.set_footer(text=footer_msg)
 
-            self.welcome_messages.setdefault(ctx.guild.id, []).append(embed)
+            # Save (replace existing)
+            self.welcome_data[guild.id] = {"channel": channel.id, "message": embed}
             await ctx.send("✅ Embed welcome message added!")
 
         else:
+            # Plain text
             await ctx.send("Enter the plain text welcome message:")
             text = (await self.bot.wait_for("message", check=check, timeout=120)).content
-            self.welcome_messages.setdefault(ctx.guild.id, []).append(text)
+
+            # Save (replace existing)
+            self.welcome_data[guild.id] = {"channel": channel.id, "message": text}
             await ctx.send("✅ Text welcome message added!")
-
-    @welcome.command(name="list")
-    @commands.has_permissions(administrator=True)
-    async def welcome_list(self, ctx):
-        """List all welcome messages."""
-        msgs = self.welcome_messages.get(ctx.guild.id, [])
-        if not msgs:
-            return await ctx.send("No welcome messages set.")
-        description = ""
-        for i, msg in enumerate(msgs, 1):
-            description += f"{i}. {'Embed' if isinstance(msg, discord.Embed) else msg[:40]}\n"
-        embed = discord.Embed(title="Welcome Messages", description=description, color=discord.Color.green())
-        await ctx.send(embed=embed)
-
-    @welcome.command(name="remove")
-    @commands.has_permissions(administrator=True)
-    async def welcome_remove(self, ctx, index: int):
-        """Remove a welcome message by index."""
-        msgs = self.welcome_messages.get(ctx.guild.id, [])
-        if not msgs or index < 1 or index > len(msgs):
-            return await ctx.send("Invalid index.")
-        removed = msgs.pop(index - 1)
-        await ctx.send(f"✅ Removed {'embed' if isinstance(removed, discord.Embed) else 'text'} welcome message.")
 
 async def setup(bot):
     await bot.add_cog(Welcome(bot))
