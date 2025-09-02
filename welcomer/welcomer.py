@@ -44,11 +44,7 @@ class Welcome(commands.Cog):
         # Send all saved welcome messages
         for msg in self.welcome_messages.get(guild.id, []):
             if isinstance(msg, discord.Embed):
-                embed = msg.copy()
-                # Replace placeholder thumbnail
-                if embed.thumbnail.url == "{avatar}":
-                    embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-                await channel.send(embed=embed)
+                await channel.send(embed=msg)
             else:
                 await channel.send(msg + invite_text)
 
@@ -88,12 +84,10 @@ class Welcome(commands.Cog):
 
             embed = discord.Embed(title=title, description=desc, color=color)
 
-            # Thumbnail
-            await ctx.send("Enter a thumbnail URL, type `avatar` to use member avatar, or `none`:")
+            # Thumbnail (custom logo, not avatar)
+            await ctx.send("Enter a thumbnail URL (e.g. AirAsia logo) or type `none`:")
             thumb_msg = (await self.bot.wait_for("message", check=check, timeout=60)).content
-            if thumb_msg.lower() == "avatar":
-                embed.set_thumbnail(url="{avatar}")  # placeholder, replaced on join
-            elif thumb_msg.lower() != "none":
+            if thumb_msg.lower() != "none":
                 embed.set_thumbnail(url=thumb_msg)
 
             # Footer
