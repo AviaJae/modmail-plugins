@@ -8,10 +8,20 @@ class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.config = {}  # Temporary in-memory storage {guild_id: {...}}
+        self.invite_cache = {}  # {guild_id: [discord.Invite]}
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Cache invites for all guilds when the bot starts."""
+        for guild in self.bot.guilds:
+            try:
+                self.invite_cache[guild.id] = await guild.invites()
+            except discord.Forbidden:
+                self.invite_cache[guild.id] = []
 
     @commands.group(invoke_without_command=True)
     async def welcome(self, ctx):
-        await ctx.send("Use `welcome add`, `welcome list`, `welcome remove`, or `welcome test`.")
+        await ctx.send("Use `welcome add`, `welcome list`, `welcome remove`, `welcome test`, or `welcome invite`.")
 
     @welcome.command(name="add")
     @commands.has_permissions(administrator=True)
@@ -87,7 +97,7 @@ class Welcome(commands.Cog):
             try:
                 msg = await self.bot.wait_for("message", timeout=60, check=check)
                 data["footer"] = msg.content
-                await ctx.send("✅ Footer saved.")  # <-- Added confirmation so it won't look stuck
+                await ctx.send("✅ Footer saved.")
             except asyncio.TimeoutError:
                 await ctx.send("⏰ Setup timed out.")
                 return
@@ -118,7 +128,7 @@ class Welcome(commands.Cog):
             embed = discord.Embed(
                 title=data.get("title", "No Title"),
                 description=data.get("description", "No Description"),
-                color=discord.Color.green(),
+                color=discord.Color.red(),
             )
             embed.set_footer(text=data.get("footer", ""))
             if "thumbnail" in data:
@@ -152,19 +162,28 @@ class Welcome(commands.Cog):
             embed = discord.Embed(
                 title=data.get("title", "No Title"),
                 description=data.get("description", "").replace("{member}", member.mention),
-                color=discord.Color.green(),
+                color=discord.Color.red(),
             )
             embed.set_footer(text=data.get("footer", ""))
             if "thumbnail" in data:
                 embed.set_thumbnail(url=data["thumbnail"])
+
+            embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+
             await channel.send(member.mention, embed=embed)
         else:
             text = data.get("text", "").replace("{member}", member.mention)
             await channel.send(text)
 
+    @welcome.command(name="invite")
+    async def welcome_invite(self, ctx, member: discord.Member = None):
+        """Check how a member joined (tracked inviter)."""
+        member = member or ctx.author
+        await ctx.send(f"**Invited by:** {member.mention}")
+
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        """Sends the welcome message when a new member joins."""
+        """Sends the welcome message when a new member joins and tracks inviter."""
         data = self.config.get(member.guild.id)
         if not data:
             return
@@ -173,30 +192,46 @@ class Welcome(commands.Cog):
         if not channel:
             return
 
-        # Find invite used
-        invite_used = "Unknown"
+        # Detect invite used
+        inviter_text = "**Invited by:** Unknown"
         try:
-            invites_before = await member.guild.invites()
-            # Note: To properly track invites, you’d need to cache invites before/after join
-            invite_used = invites_before[0].url if invites_before else "Unknown"
+            before_invites = self.invite_cache.get(member.guild.id, [])
+            after_invites = await member.guild.invites()
+
+            used_invite = None
+            for invite in after_invites:
+                old = discord.utils.get(before_invites, code=invite.code)
+                if old and invite.uses > old.uses:
+                    used_invite = invite
+                    break
+
+            self.invite_cache[member.guild.id] = after_invites
+
+            if used_invite:
+                inviter_text = f"**Invited by:** {used_invite.inviter.mention if used_invite.inviter else 'Unknown'}"
         except Exception:
             pass
 
+        # Send welcome message
         if data["embed"]:
             embed = discord.Embed(
                 title=data.get("title", "No Title"),
-                description=data.get("description", "").replace("{member}", member.mention)
-                              + f"\nJoined with invite: {invite_used}",
+                description=data.get("description", "").replace("{member}", member.mention),
                 color=discord.Color.green(),
             )
             embed.set_footer(text=data.get("footer", ""))
             if "thumbnail" in data:
                 embed.set_thumbnail(url=data["thumbnail"])
+
+            embed.set_author(name=str(member), icon_url=member.display_avatar.url)
+
             await channel.send(member.mention, embed=embed)
         else:
             text = data.get("text", "").replace("{member}", member.mention)
-            text += f"\nJoined with invite: {invite_used}"
             await channel.send(text)
+
+        # Send invite info AFTER the embed/text
+        await channel.send(inviter_text)
 
 
 async def setup(bot):
